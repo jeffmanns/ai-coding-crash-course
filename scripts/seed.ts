@@ -1913,17 +1913,364 @@ You've completed the Building REST APIs course. You now have the skills to build
     `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
   );
 
+  // ─── Instructor Analytics: Sarah Chen's archived and draft courses ───
+  // Everything below only adds rows, and runs after every existing insert so
+  // the ids of earlier rows are unchanged. It gives the Analytics page
+  // cross-course data: Emma and James are shared with course 1 (so unique
+  // students < total enrollments), James retakes a quiz 25% → 25% → 75% → 100%
+  // (so first and best quiz averages differ), and the draft course has no
+  // students (so the page can show it is excluded).
+
+  const [noah] = db
+    .insert(schema.users)
+    .values({
+      name: "Noah Kim",
+      email: "noah.kim@student.dev",
+      role: UserRole.Student,
+      avatarUrl: "https://api.dicebear.com/9.x/avataaars/svg?seed=noah",
+      createdAt: daysAgo(70),
+    })
+    .returning()
+    .all();
+
+  function seedCourseContent(
+    courseId: number,
+    createdDaysAgo: number,
+    courseModules: {
+      title: string;
+      lessons: { title: string; duration: number; content: string }[];
+    }[]
+  ): number[] {
+    const lessonIds: number[] = [];
+    for (let mi = 0; mi < courseModules.length; mi++) {
+      const modData = courseModules[mi];
+      const [mod] = db
+        .insert(schema.modules)
+        .values({
+          courseId,
+          title: modData.title,
+          position: mi + 1,
+          createdAt: daysAgo(createdDaysAgo - mi),
+        })
+        .returning()
+        .all();
+
+      for (let li = 0; li < modData.lessons.length; li++) {
+        const lessonData = modData.lessons[li];
+        const [lesson] = db
+          .insert(schema.lessons)
+          .values({
+            moduleId: mod.id,
+            title: lessonData.title,
+            content: lessonData.content,
+            position: li + 1,
+            durationMinutes: lessonData.duration,
+            createdAt: daysAgo(createdDaysAgo - mi),
+          })
+          .returning()
+          .all();
+        lessonIds.push(lesson.id);
+      }
+    }
+    return lessonIds;
+  }
+
+  // Archived course: Sarah no longer sells it, but students are still in it.
+  const [course3] = db
+    .insert(schema.courses)
+    .values({
+      title: "TypeScript Design Patterns",
+      slug: "typescript-design-patterns",
+      description:
+        "Classic and modern design patterns expressed with TypeScript's type system: builders, state machines, dependency injection and more.",
+      salesCopy: `## Patterns, Typed
+
+Design patterns are easier to apply — and harder to misuse — when the type system enforces them. This course walks through the patterns that matter in modern TypeScript codebases.
+
+*This course has been retired and is no longer available for purchase.*`,
+      instructorId: instructor1.id,
+      categoryId: catBySlug["programming"].id,
+      status: CourseStatus.Archived,
+      coverImageUrl: "/images/course-typescript.svg",
+      price: 3999,
+      createdAt: daysAgo(98),
+      updatedAt: daysAgo(5),
+    })
+    .returning()
+    .all();
+
+  const course3LessonIds = seedCourseContent(course3.id, 98, [
+    {
+      title: "Creational Patterns",
+      lessons: [
+        {
+          title: "Typed Builders",
+          duration: 10,
+          content: `## Typed Builders\n\nUse generics to track which fields a builder has set, so \`build()\` only compiles once every required field is present.`,
+        },
+        {
+          title: "Factories and Discriminated Unions",
+          duration: 12,
+          content: `## Factories\n\nA factory that switches on a discriminant can return a precisely typed variant for each case.`,
+        },
+        {
+          title: "Dependency Injection Without a Framework",
+          duration: 14,
+          content: `## Dependency Injection\n\nPass dependencies as typed parameters and let the compiler check every wiring site.`,
+        },
+      ],
+    },
+    {
+      title: "Behavioral Patterns",
+      lessons: [
+        {
+          title: "Typed State Machines",
+          duration: 15,
+          content: `## State Machines\n\nModel each state as a union member so impossible transitions fail to compile.`,
+        },
+        {
+          title: "The Observer Pattern with Typed Events",
+          duration: 11,
+          content: `## Typed Events\n\nMap event names to payload types so every listener receives exactly the data it expects.`,
+        },
+        {
+          title: "Patterns Quiz Review",
+          duration: 6,
+          content: `## Review\n\nCheck your understanding of the patterns covered in this course.`,
+        },
+      ],
+    },
+  ]);
+
+  // Draft course: still being written, so nobody is enrolled.
+  const [course4] = db
+    .insert(schema.courses)
+    .values({
+      title: "Advanced TypeScript Generics",
+      slug: "advanced-typescript-generics",
+      description:
+        "Go deep on generics: inference, variance, higher-order type utilities and library-grade type design.",
+      salesCopy: `## Coming Soon\n\nA deep dive into the generic type techniques used by popular TypeScript libraries.`,
+      instructorId: instructor1.id,
+      categoryId: catBySlug["programming"].id,
+      status: CourseStatus.Draft,
+      price: 5999,
+      createdAt: daysAgo(7),
+      updatedAt: daysAgo(2),
+    })
+    .returning()
+    .all();
+
+  const course4LessonIds = seedCourseContent(course4.id, 7, [
+    {
+      title: "Inference",
+      lessons: [
+        {
+          title: "How Generic Inference Works",
+          duration: 12,
+          content: `## Inference\n\nDraft — outline only.`,
+        },
+        {
+          title: "Const Type Parameters",
+          duration: 9,
+          content: `## Const Type Parameters\n\nDraft — outline only.`,
+        },
+      ],
+    },
+  ]);
+
+  function seedQuiz(
+    lessonId: number,
+    title: string,
+    passingScore: number,
+    questions: {
+      text: string;
+      type: QuestionType;
+      options: { text: string; correct: boolean }[];
+    }[]
+  ) {
+    const [quiz] = db
+      .insert(schema.quizzes)
+      .values({ lessonId, title, passingScore })
+      .returning()
+      .all();
+
+    const optionIds: {
+      questionId: number;
+      optionId: number;
+      correct: boolean;
+    }[] = [];
+
+    for (let qi = 0; qi < questions.length; qi++) {
+      const q = questions[qi];
+      const [question] = db
+        .insert(schema.quizQuestions)
+        .values({
+          quizId: quiz.id,
+          questionText: q.text,
+          questionType: q.type,
+          position: qi + 1,
+        })
+        .returning()
+        .all();
+
+      for (const opt of q.options) {
+        const [option] = db
+          .insert(schema.quizOptions)
+          .values({
+            questionId: question.id,
+            optionText: opt.text,
+            isCorrect: opt.correct,
+          })
+          .returning()
+          .all();
+        optionIds.push({
+          questionId: question.id,
+          optionId: option.id,
+          correct: opt.correct,
+        });
+      }
+    }
+
+    return { quiz, optionIds };
+  }
+
+  const [emma, james] = students;
+  const course3ReviewLessonId = course3LessonIds[5]; // "Patterns Quiz Review"
+
+  // 4-question quiz on the archived course's review lesson.
+  const { quiz: quiz4, optionIds: quiz4OptionIds } = seedQuiz(
+    course3ReviewLessonId,
+    "Design Patterns Check",
+    0.7,
+    [
+      {
+        text: "Which pattern lets the compiler reject an incomplete object before it is built?",
+        type: QuestionType.MultipleChoice,
+        options: [
+          { text: "Typed builder", correct: true },
+          { text: "Singleton", correct: false },
+          { text: "Observer", correct: false },
+        ],
+      },
+      {
+        text: "Modelling states as a union can make impossible transitions a compile error.",
+        type: QuestionType.TrueFalse,
+        options: [
+          { text: "True", correct: true },
+          { text: "False", correct: false },
+        ],
+      },
+      {
+        text: "What gives a typed event emitter its payload safety?",
+        type: QuestionType.MultipleChoice,
+        options: [
+          { text: "A map from event names to payload types", correct: true },
+          { text: "Using `any` for listener arguments", correct: false },
+          { text: "Runtime reflection", correct: false },
+        ],
+      },
+      {
+        text: "Dependency injection requires a framework in TypeScript.",
+        type: QuestionType.TrueFalse,
+        options: [
+          { text: "True", correct: false },
+          { text: "False", correct: true },
+        ],
+      },
+    ]
+  );
+
+  // Enrollments in the archived course:
+  // - Emma (shared with course 1): completed it
+  // - James (shared with course 1): part-way through, retook the quiz
+  // - Noah (new): enrolled but never started
+  db.insert(schema.enrollments)
+    .values([
+      {
+        userId: emma.id,
+        courseId: course3.id,
+        enrolledAt: daysAgo(58),
+        completedAt: daysAgo(51),
+      },
+      { userId: james.id, courseId: course3.id, enrolledAt: daysAgo(54) },
+      { userId: noah.id, courseId: course3.id, enrolledAt: daysAgo(65) },
+    ])
+    .run();
+
+  // Emma — completed every lesson of the archived course
+  for (let i = 0; i < course3LessonIds.length; i++) {
+    markComplete(emma.id, course3LessonIds[i], 57 - i);
+  }
+
+  // James — 3 of 6 lessons done, plus the quiz lesson in progress
+  for (let i = 0; i < 3; i++) {
+    markComplete(james.id, course3LessonIds[i], 53 - i);
+  }
+  markInProgress(james.id, course3ReviewLessonId);
+
+  // Emma — passed the quiz first time (4/4)
+  recordQuizAttempt(emma.id, quiz4.id, quiz4OptionIds, [0, 1, 2, 3], 52);
+
+  // James — four attempts, in order: 25%, 25%, 75%, 100%
+  recordQuizAttempt(james.id, quiz4.id, quiz4OptionIds, [0], 50);
+  recordQuizAttempt(james.id, quiz4.id, quiz4OptionIds, [1], 49);
+  recordQuizAttempt(james.id, quiz4.id, quiz4OptionIds, [0, 1, 2], 48);
+  recordQuizAttempt(james.id, quiz4.id, quiz4OptionIds, [0, 1, 2, 3], 47);
+
+  db.insert(schema.purchases)
+    .values([
+      {
+        userId: emma.id, // Emma — full price
+        courseId: course3.id,
+        amountPaid: 3999,
+        country: "US",
+        createdAt: daysAgo(58),
+      },
+      {
+        userId: james.id, // James — PPP discount (India)
+        courseId: course3.id,
+        amountPaid: 2000,
+        country: "IN",
+        createdAt: daysAgo(54),
+      },
+      {
+        userId: noah.id, // Noah — full price
+        courseId: course3.id,
+        amountPaid: 3999,
+        country: "US",
+        createdAt: daysAgo(65),
+      },
+    ])
+    .run();
+
+  db.insert(schema.courseRatings)
+    .values([
+      {
+        userId: emma.id,
+        courseId: course3.id,
+        rating: 4,
+        createdAt: daysAgo(50),
+        updatedAt: daysAgo(50),
+      },
+    ])
+    .run();
+
+  console.log(
+    `Created archived course "${course3.title}" (${course3LessonIds.length} lessons, 3 enrollments, 1 quiz) and draft course "${course4.title}" (${course4LessonIds.length} lessons, no enrollments) for ${instructor1.name}.`
+  );
+
   console.log("\n✓ Seed complete!");
-  console.log("  Users: 9 (1 admin, 2 instructors, 6 students)");
+  console.log("  Users: 10 (1 admin, 2 instructors, 7 students)");
   console.log("  Categories: 5");
   console.log(
-    `  Courses: 2 (${course1LessonIds.length} + ${course2LessonIds.length} lessons)`
+    `  Courses: 4 (${course1LessonIds.length} + ${course2LessonIds.length} + ${course3LessonIds.length} + ${course4LessonIds.length} lessons; 2 published, 1 archived, 1 draft)`
   );
-  console.log("  Quizzes: 3");
-  console.log("  Enrollments: 7");
-  console.log("  Course ratings: 6");
+  console.log("  Quizzes: 4");
+  console.log("  Enrollments: 10");
+  console.log("  Course ratings: 7");
   console.log("  Lesson comments: 15 (4 questions awaiting an answer)");
-  console.log("  Purchases: 6 (5 individual + 1 team)");
+  console.log("  Purchases: 9 (8 individual + 1 team)");
   console.log("  Teams: 1 (with 5 coupons)");
 }
 
