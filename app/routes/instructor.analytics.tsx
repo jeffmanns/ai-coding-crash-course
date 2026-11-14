@@ -6,7 +6,15 @@ import { requireUserId } from "~/lib/access.server";
 import { CourseStatus, UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
-import { AlertTriangle, BarChart3, Users } from "lucide-react";
+import { formatPrice } from "~/lib/utils";
+import {
+  AlertTriangle,
+  BarChart3,
+  CircleCheck,
+  DollarSign,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 
 export function meta() {
   return [
@@ -28,8 +36,39 @@ export async function loader({ request }: Route.LoaderArgs) {
 }
 
 /** Metrics with no data arrive as null and render as an em dash. */
-function formatMetric(value: number | null) {
-  return value === null ? "—" : value.toLocaleString();
+function formatMetric(
+  value: number | null,
+  format: (value: number) => string = (v) => v.toLocaleString()
+) {
+  return value === null ? "—" : format(value);
+}
+
+const formatPercent = (value: number) => `${Math.round(value)}%`;
+
+// formatPrice shows 0 as "Free", which reads wrong for earnings.
+const formatRevenue = (cents: number) =>
+  cents === 0 ? "$0.00" : formatPrice(cents);
+
+function MetricCard({
+  title,
+  icon: Icon,
+  value,
+}: {
+  title: string;
+  icon: LucideIcon;
+  value: string;
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+        <Icon className="size-4 text-muted-foreground" />
+      </CardHeader>
+      <CardContent>
+        <div className="text-3xl font-bold">{value}</div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function InstructorAnalytics({
@@ -68,19 +107,21 @@ export default function InstructorAnalytics({
       ) : (
         <>
           <div className="mb-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">
-                  Unique students
-                </CardTitle>
-                <Users className="size-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold">
-                  {formatMetric(totals.uniqueStudents)}
-                </div>
-              </CardContent>
-            </Card>
+            <MetricCard
+              title="Unique students"
+              icon={Users}
+              value={formatMetric(totals.uniqueStudents)}
+            />
+            <MetricCard
+              title="Completion rate"
+              icon={CircleCheck}
+              value={formatMetric(totals.completionRate, formatPercent)}
+            />
+            <MetricCard
+              title="Total revenue"
+              icon={DollarSign}
+              value={formatRevenue(totals.revenue)}
+            />
           </div>
 
           <Card>
@@ -93,6 +134,11 @@ export default function InstructorAnalytics({
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-2 font-medium">Course</th>
                     <th className="pb-2 text-right font-medium">Enrollments</th>
+                    <th className="pb-2 text-right font-medium">
+                      Completion rate
+                    </th>
+                    <th className="pb-2 text-right font-medium">Avg progress</th>
+                    <th className="pb-2 text-right font-medium">Revenue</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -115,6 +161,15 @@ export default function InstructorAnalytics({
                       </td>
                       <td className="py-3 text-right tabular-nums">
                         {formatMetric(course.enrollments)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatMetric(course.completionRate, formatPercent)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatMetric(course.averageProgress, formatPercent)}
+                      </td>
+                      <td className="py-3 text-right tabular-nums">
+                        {formatRevenue(course.revenue)}
                       </td>
                     </tr>
                   ))}
