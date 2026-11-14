@@ -2,6 +2,7 @@ import { Link, data, isRouteErrorResponse } from "react-router";
 import type { Route } from "./+types/instructor.analytics";
 import { getInstructorAnalytics } from "~/services/instructorAnalyticsService";
 import { getUserById } from "~/services/userService";
+import type { CourseRatingSummary } from "~/services/courseRatingService";
 import { requireUserId } from "~/lib/access.server";
 import { CourseStatus, UserRole } from "~/db/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -12,6 +13,7 @@ import {
   BarChart3,
   CircleCheck,
   DollarSign,
+  MessageCircleQuestion,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -49,17 +51,25 @@ const formatPercent = (value: number) => `${Math.round(value)}%`;
 const formatRevenue = (cents: number) =>
   cents === 0 ? "$0.00" : formatPrice(cents);
 
+const formatQuizScore = (value: number | null) =>
+  formatMetric(value, formatPercent);
+
+const formatRating = (rating: CourseRatingSummary) =>
+  formatMetric(rating.average, (average) => `${average.toFixed(1)} (${rating.count})`);
+
 function MetricCard({
   title,
   icon: Icon,
   value,
+  to,
 }: {
   title: string;
   icon: LucideIcon;
   value: string;
+  to?: string;
 }) {
-  return (
-    <Card>
+  const card = (
+    <Card className={to ? "h-full transition-colors hover:bg-muted/50" : undefined}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm font-medium">{title}</CardTitle>
         <Icon className="size-4 text-muted-foreground" />
@@ -69,6 +79,8 @@ function MetricCard({
       </CardContent>
     </Card>
   );
+
+  return to ? <Link to={to}>{card}</Link> : card;
 }
 
 export default function InstructorAnalytics({
@@ -122,23 +134,37 @@ export default function InstructorAnalytics({
               icon={DollarSign}
               value={formatRevenue(totals.revenue)}
             />
+            <MetricCard
+              title="Unanswered questions"
+              icon={MessageCircleQuestion}
+              value={formatMetric(totals.unansweredQuestions)}
+              to="/instructor/questions"
+            />
           </div>
 
           <Card>
             <CardHeader>
               <CardTitle>Courses</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-muted-foreground">
                     <th className="pb-2 font-medium">Course</th>
-                    <th className="pb-2 text-right font-medium">Enrollments</th>
-                    <th className="pb-2 text-right font-medium">
+                    <th className="pb-2 pl-4 text-right font-medium">Enrollments</th>
+                    <th className="pb-2 pl-4 text-right font-medium">
                       Completion rate
                     </th>
-                    <th className="pb-2 text-right font-medium">Avg progress</th>
-                    <th className="pb-2 text-right font-medium">Revenue</th>
+                    <th className="pb-2 pl-4 text-right font-medium">Avg progress</th>
+                    <th className="pb-2 pl-4 text-right font-medium">Revenue</th>
+                    <th className="pb-2 pl-4 text-right font-medium">Rating</th>
+                    <th className="pb-2 pl-4 text-right font-medium">
+                      Avg best quiz score
+                    </th>
+                    <th className="pb-2 pl-4 text-right font-medium">
+                      Avg first quiz score
+                    </th>
+                    <th className="pb-2 pl-4 text-right font-medium">Unanswered</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -159,17 +185,29 @@ export default function InstructorAnalytics({
                           )}
                         </div>
                       </td>
-                      <td className="py-3 text-right tabular-nums">
+                      <td className="py-3 pl-4 text-right tabular-nums">
                         {formatMetric(course.enrollments)}
                       </td>
-                      <td className="py-3 text-right tabular-nums">
+                      <td className="py-3 pl-4 text-right tabular-nums">
                         {formatMetric(course.completionRate, formatPercent)}
                       </td>
-                      <td className="py-3 text-right tabular-nums">
+                      <td className="py-3 pl-4 text-right tabular-nums">
                         {formatMetric(course.averageProgress, formatPercent)}
                       </td>
-                      <td className="py-3 text-right tabular-nums">
+                      <td className="py-3 pl-4 text-right tabular-nums">
                         {formatRevenue(course.revenue)}
+                      </td>
+                      <td className="py-3 pl-4 text-right tabular-nums">
+                        {formatRating(course.rating)}
+                      </td>
+                      <td className="py-3 pl-4 text-right tabular-nums">
+                        {formatQuizScore(course.averageBestQuizScore)}
+                      </td>
+                      <td className="py-3 pl-4 text-right tabular-nums">
+                        {formatQuizScore(course.averageFirstQuizScore)}
+                      </td>
+                      <td className="py-3 pl-4 text-right tabular-nums">
+                        {formatMetric(course.unansweredQuestions)}
                       </td>
                     </tr>
                   ))}

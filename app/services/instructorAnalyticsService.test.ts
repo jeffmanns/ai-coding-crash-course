@@ -83,6 +83,39 @@ function insertPurchase(userId: number, courseId: number, amountPaid: number) {
 
 const COMPLETED_AT = "2026-01-01T00:00:00.000Z";
 
+function insertRating(userId: number, courseId: number, rating: number) {
+  testDb.insert(schema.courseRatings).values({ userId, courseId, rating }).run();
+}
+
+function insertComment(lessonId: number, userId: number, parentId: number | null = null) {
+  return testDb
+    .insert(schema.comments)
+    .values({ lessonId, userId, parentId, body: "A comment" })
+    .returning()
+    .get();
+}
+
+const PASSING_SCORE = 0.7;
+
+function insertQuiz(courseId: number) {
+  const [lesson] = insertLessons(courseId, 1);
+  return testDb
+    .insert(schema.quizzes)
+    .values({ lessonId: lesson.id, title: "Quiz", passingScore: PASSING_SCORE })
+    .returning()
+    .get();
+}
+
+function recordAttempt(userId: number, quizId: number, score: number, attemptedAt: string) {
+  return testDb
+    .insert(schema.quizAttempts)
+    .values({ userId, quizId, score, passed: score >= PASSING_SCORE, attemptedAt })
+    .returning()
+    .get();
+}
+
+const isoDay = (n: number) => `2026-01-${String(n).padStart(2, "0")}T00:00:00.000Z`;
+
 function courseById(result: ReturnType<typeof getInstructorAnalytics>, id: number) {
   const course = result.courses.find((c) => c.id === id);
   if (!course) throw new Error(`course ${id} not in result`);
@@ -164,7 +197,7 @@ describe("getInstructorAnalytics", () => {
     const result = getInstructorAnalytics(newcomer.id);
 
     expect(result).toEqual({
-      totals: { uniqueStudents: 0, completionRate: null, revenue: 0 },
+      totals: { uniqueStudents: 0, completionRate: null, revenue: 0, unansweredQuestions: 0 },
       courses: [],
     });
   });
@@ -286,6 +319,132 @@ describe("getInstructorAnalytics", () => {
       expect(courseById(result, base.course.id).enrollments).toBe(2);
       expect(courseById(result, base.course.id).revenue).toBe(15000);
       expect(result.totals.revenue).toBe(15000);
+    });
+  });
+
+  describe("rating", () => {
+    it("is the course's rating average and count, with a null average when unrated", () => {
+      const unrated = insertCourse("unrated-course", base.instructor.id);
+      const [a, b, c] = ["a", "b", "c"].map((s) => insertStudent(`${s}@example.com`));
+      insertRating(a.id, base.course.id, 5);
+      insertRating(b.id, base.course.id, 4);
+      insertRating(c.id, base.course.id, 4);
+
+      const result = getInstructorAnalytics(base.instructor.id);
+
+      expect(courseById(result, base.course.id).rating).toEqual({ average: 4.3, count: 3 });
+      expect(courseById(result, unrated.id).rating).toEqual({ average: null, count: 0 });
+    });
+  });
+
+  describe("unanswered questions", () => {
+    it("counts per course, and in total across everything in the Questions queue", () => {
+      const admin = insertUser("admin@example.com", schema.UserRole.Admin);
+      const second = insertCourse("second-course", base.instructor.id);
+      const quiet = insertCourse("quiet-course", base.instructor.id);
+      const draft = insertCourse("draft-course", base.instructor.id, schema.CourseStatus.Draft);
+      const [draftLesson] = insertLessons(draft.id, 1);
+      const others = insertCourse("others-course", insertInstructor("other@example.com").id);
+      const [lesson] = insertLessons(base.course.id, 1);
+      const [secondLesson] = insertLessons(second.id, 1);
+      const [othersLesson] = insertLessons(others.id, 1);
+      const peer = insertStudent("peer@example.com");
+
+      insertComment(lesson.id, base.user.id); // unanswered
+      const peerAnswered = insertComment(lesson.id, base.user.id);
+      insertComment(lesson.id, peer.id, peerAnswered.id); // a student reply doesn't answer it
+      const instructorAnswered = insertComment(lesson.id, base.user.id);
+      insertComment(lesson.id, base.instructor.id, instructorAnswered.id);
+      const adminAnswered = insertComment(lesson.id, base.user.id);
+      insertComment(lesson.id, admin.id, adminAnswered.id);
+      insertComment(lesson.id, base.instructor.id); // instructor's own post isn't work
+      insertComment(secondLesson.id, peer.id); // unanswered
+      insertComment(othersLesson.id, peer.id); // another instructor's course
+      insertComment(draftLesson.id, peer.id); // in the queue, but drafts get no table row
+
+      const result = getInstructorAnalytics(base.instructor.id);
+
+      expect(courseById(result, base.course.id).unansweredQuestions).toBe(2);
+      expect(courseById(result, second.id).unansweredQuestions).toBe(1);
+      expect(courseById(result, quiet.id).unansweredQuestions).toBe(0);
+      expect(result.courses.map((c) => c.id)).not.toContain(draft.id);
+      expect(result.totals.unansweredQuestions).toBe(4);
+    });
+  });
+
+  describe("quiz scores", () => {
+    it("takes a student's best and first attempt: 25%, 25%, 75%, 100% gives 100% best and 25% first", () => {
+      const quiz = insertQuiz(base.course.id);
+      enroll(base.user.id, base.course.id);
+      recordAttempt(base.user.id, quiz.id, 0.75, isoDay(3));
+      recordAttempt(base.user.id, quiz.id, 0.25, isoDay(1));
+      recordAttempt(base.user.id, quiz.id, 1, isoDay(4));
+      recordAttempt(base.user.id, quiz.id, 0.25, isoDay(2));
+
+      const course = courseById(getInstructorAnalytics(base.instructor.id), base.course.id);
+
+      expect(course.averageBestQuizScore).toBe(100);
+      expect(course.averageFirstQuizScore).toBe(25);
+    });
+
+    it("resolves attempts with the same timestamp to the lowest id as first", () => {
+      const quiz = insertQuiz(base.course.id);
+      enroll(base.user.id, base.course.id);
+      recordAttempt(base.user.id, quiz.id, 0.5, isoDay(1));
+      recordAttempt(base.user.id, quiz.id, 0.9, isoDay(1));
+
+      const course = courseById(getInstructorAnalytics(base.instructor.id), base.course.id);
+
+      expect(course.averageFirstQuizScore).toBe(50);
+      expect(course.averageBestQuizScore).toBe(90);
+    });
+
+    it("counts each student once per quiz in both averages, however many retakes", () => {
+      const quizA = insertQuiz(base.course.id);
+      const quizB = insertQuiz(base.course.id);
+      const retaker = insertStudent("retaker@example.com");
+      enroll(retaker.id, base.course.id);
+      enroll(base.user.id, base.course.id);
+      // retaker on quiz A: first 0.2, best 1.0 (five attempts)
+      recordAttempt(retaker.id, quizA.id, 0.2, isoDay(1));
+      [0.4, 0.6, 0.8, 1].forEach((score, i) => recordAttempt(retaker.id, quizA.id, score, isoDay(i + 2)));
+      // base user on quiz A: single 0.6
+      recordAttempt(base.user.id, quizA.id, 0.6, isoDay(1));
+      // base user on quiz B: first 0.4, best 0.7
+      recordAttempt(base.user.id, quizB.id, 0.4, isoDay(1));
+      recordAttempt(base.user.id, quizB.id, 0.7, isoDay(2));
+
+      const course = courseById(getInstructorAnalytics(base.instructor.id), base.course.id);
+
+      expect(course.averageBestQuizScore).toBeCloseTo((100 + 60 + 70) / 3);
+      expect(course.averageFirstQuizScore).toBeCloseTo((20 + 60 + 40) / 3);
+    });
+
+    it("are both null for a course with no quiz attempts", () => {
+      insertQuiz(base.course.id);
+      const other = insertCourse("other-course", base.instructor.id);
+      enroll(base.user.id, other.id);
+      recordAttempt(base.user.id, insertQuiz(other.id).id, 0.5, isoDay(1));
+
+      const result = getInstructorAnalytics(base.instructor.id);
+
+      expect(courseById(result, base.course.id).averageBestQuizScore).toBeNull();
+      expect(courseById(result, base.course.id).averageFirstQuizScore).toBeNull();
+      expect(courseById(result, other.id).averageBestQuizScore).toBe(50);
+    });
+
+    it("counts only enrolled students, like the Student Roster", () => {
+      const quiz = insertQuiz(base.course.id);
+      const outsider = insertStudent("outsider@example.com");
+      enroll(base.user.id, base.course.id);
+      recordAttempt(base.user.id, quiz.id, 0.8, isoDay(1));
+      recordAttempt(outsider.id, quiz.id, 0.2, isoDay(1));
+      recordAttempt(base.instructor.id, quiz.id, 0.4, isoDay(1));
+
+      const course = courseById(getInstructorAnalytics(base.instructor.id), base.course.id);
+
+      expect(course.averageBestQuizScore).toBe(80);
+      expect(course.averageFirstQuizScore).toBe(80);
     });
   });
 });

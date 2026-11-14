@@ -9,14 +9,19 @@ import {
   lessons,
   modules,
   purchases,
+  quizAttempts,
+  quizzes,
 } from "~/db/schema";
+import { getUnansweredQuestions } from "~/services/commentService";
+import { getCourseRatingSummaries } from "~/services/courseRatingService";
 
 // ─── Instructor Analytics Service ───
 // Aggregate metrics across an instructor's courses for the Analytics page.
 // getInstructorAnalytics is the single public entry point; later metrics are
-// added to its result. Metrics with no data are null (rendered as "—").
-// Rates (completionRate, averageProgress) are percentages 0–100, unrounded;
-// revenue is in cents.
+// added to its result. Metrics with no data are null (rendered as "—"); counts
+// (enrollments, unansweredQuestions) are 0 instead.
+// Rates (completionRate, averageProgress, quiz averages) are percentages 0–100,
+// unrounded; revenue is in cents; rating is the 1–5 CourseRatingSummary.
 // Uses positional parameters (project convention).
 
 const IN_SCOPE_STATUSES = [CourseStatus.Published, CourseStatus.Archived];
@@ -68,6 +73,61 @@ function revenueByCourse() {
     .from(purchases)
     .groupBy(purchases.courseId)
     .as("course_revenue");
+}
+
+// Average best and first quiz score per course, as percentages. Each enrolled
+// (student, quiz) pair counts once — enrolled only, matching the Student Roster: its highest score towards the best average
+// (matching the Student Roster) and its earliest attempt towards the first
+// average, with the lowest id breaking timestamp ties.
+function quizAveragesByCourse(instructorId: number) {
+  const pairKey = sql`partition by ${quizAttempts.userId}, ${quizAttempts.quizId}`;
+  const rankedAttempts = db
+    .select({
+      courseId: modules.courseId,
+      score: quizAttempts.score,
+      bestScore: sql<number>`max(${quizAttempts.score}) over (${pairKey})`.as("best_score"),
+      attemptRank: sql<number>`row_number() over (${pairKey} order by ${quizAttempts.attemptedAt}, ${quizAttempts.id})`.as("attempt_rank"),
+    })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .innerJoin(
+      enrollments,
+      and(
+        eq(enrollments.userId, quizAttempts.userId),
+        eq(enrollments.courseId, courses.id)
+      )
+    )
+    .where(inScopeCourses(instructorId))
+    .as("ranked_attempts");
+
+  const rows = db
+    .select({
+      courseId: rankedAttempts.courseId,
+      averageBest: sql<number>`100.0 * avg(${rankedAttempts.bestScore})`,
+      averageFirst: sql<number>`100.0 * avg(${rankedAttempts.score})`,
+    })
+    .from(rankedAttempts)
+    .where(eq(rankedAttempts.attemptRank, 1))
+    .groupBy(rankedAttempts.courseId)
+    .all();
+
+  return new Map(rows.map((row) => [row.courseId, row]));
+}
+
+// Unanswered questions from the Questions queue's own query, so the two can
+// never disagree on what counts as unanswered. The total is the whole queue —
+// the headline card links there — including questions on draft courses, which
+// get no row in the course table.
+function unansweredQuestions(instructorId: number) {
+  const queue = getUnansweredQuestions(instructorId);
+  const byCourse = new Map<number, number>();
+  for (const question of queue) {
+    byCourse.set(question.courseId, (byCourse.get(question.courseId) ?? 0) + 1);
+  }
+  return { total: queue.length, byCourse };
 }
 
 export function getInstructorAnalytics(instructorId: number) {
@@ -126,12 +186,26 @@ export function getInstructorAnalytics(instructorId: number) {
     .where(inScopeCourses(instructorId))
     .get();
 
+  const ratings = getCourseRatingSummaries(courseRows.map((course) => course.id));
+  const quizAverages = quizAveragesByCourse(instructorId);
+  const unanswered = unansweredQuestions(instructorId);
+
+  const courseMetrics = courseRows.map((course) => ({
+    ...course,
+    // getCourseRatingSummaries returns an entry for every id it is given.
+    rating: ratings.get(course.id)!,
+    averageBestQuizScore: quizAverages.get(course.id)?.averageBest ?? null,
+    averageFirstQuizScore: quizAverages.get(course.id)?.averageFirst ?? null,
+    unansweredQuestions: unanswered.byCourse.get(course.id) ?? 0,
+  }));
+
   return {
     totals: {
       uniqueStudents: studentRow?.uniqueStudents ?? 0,
       completionRate: studentRow?.completionRate ?? null,
       revenue: courseRows.reduce((sum, course) => sum + course.revenue, 0),
+      unansweredQuestions: unanswered.total,
     },
-    courses: courseRows,
+    courses: courseMetrics,
   };
 }
