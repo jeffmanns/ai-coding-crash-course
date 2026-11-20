@@ -38,7 +38,7 @@ export type InstructorCourseAnalytics = {
   status: CourseStatus;
   enrollments: number;
   completionRate: number | null; // 0–1
-  avgProgress: number | null; // 0–100
+  avgProgress: number | null; // 0–1
   revenue: number; // cents
   rating: CourseRatingSummary;
   unansweredQuestions: number;
@@ -91,9 +91,10 @@ function getQuizScoreAverages(courseIds: number[]) {
     .select({
       courseId: modules.courseId,
       score: quizAttempts.score,
-      bestScore: sql<number>`max(${quizAttempts.score}) over (${perStudentQuiz})`.as(
-        "best_score"
-      ),
+      bestScore:
+        sql<number>`max(${quizAttempts.score}) over (${perStudentQuiz})`.as(
+          "best_score"
+        ),
       attemptOrder:
         sql<number>`row_number() over (${perStudentQuiz} order by ${quizAttempts.attemptedAt}, ${quizAttempts.id})`.as(
           "attempt_order"
@@ -209,6 +210,7 @@ function getRevenueByCourse(instructorId: number) {
 // Average progress mirrors calculateProgress(userId, courseId, false, false),
 // the Student Roster's Progress column: completed lessons ÷ course lessons,
 // rounded to a whole percent per student, 0 for a course with no lessons.
+// Reported as a 0–1 fraction (the rounded percent ÷ 100), like completionRate.
 
 type ProgressRow = { completed: number; avgProgress: number | null };
 
@@ -246,7 +248,7 @@ function getProgressByCourse(instructorId: number) {
     when coalesce(${lessonTotals.total}, 0) = 0 then 0
     else cast(
       (coalesce(${completedLessons.completed}, 0) * 1.0 / ${lessonTotals.total}) * 100 + 0.5
-      as integer)
+      as integer) / 100.0
   end`;
 
   const rows = db
