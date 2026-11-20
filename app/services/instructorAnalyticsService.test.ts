@@ -19,6 +19,7 @@ import { createComment } from "./commentService";
 import { calculateProgress } from "./progressService";
 import { createPurchase, createTeamPurchase } from "./purchaseService";
 import { redeemCoupon } from "./couponService";
+import { unenrollUser } from "./enrollmentService";
 
 function insertInstructor(email: string) {
   return testDb
@@ -295,6 +296,21 @@ describe("getInstructorAnalytics", () => {
     // Pairs: (user, A) best 0.6 first 0.2; (user, B) 0.5; (other, A) 1.0
     expect(course.avgBestQuizScore).toBeCloseTo(0.7);
     expect(course.avgFirstQuizScore).toBeCloseTo(1.7 / 3);
+  });
+
+  it("leaves students who have unenrolled out of both quiz averages, matching the Student Roster", () => {
+    const quiz = insertQuiz(base.course.id);
+    const leaver = insertStudent("leaver@example.com");
+    enroll(base.user.id, base.course.id);
+    enroll(leaver.id, base.course.id);
+    attempt(base.user.id, quiz.id, 0.5, "2026-01-01T00:00:00.000Z");
+    attempt(leaver.id, quiz.id, 1, "2026-01-01T00:00:00.000Z");
+    unenrollUser(leaver.id, base.course.id);
+
+    const [course] = getInstructorAnalytics(base.instructor.id).courses;
+
+    expect(course.avgBestQuizScore).toBe(0.5);
+    expect(course.avgFirstQuizScore).toBe(0.5);
   });
 
   it("reports null quiz averages for a course with no quiz attempts", () => {
