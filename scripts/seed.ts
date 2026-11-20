@@ -1913,17 +1913,330 @@ You've completed the Building REST APIs course. You now have the skills to build
     `Created 1 team with Bossy McBossface as admin, 1 team purchase, and ${seededCoupons.length} coupons (2 redeemed, 3 available).`
   );
 
+  // ─── Instructor Analytics: Sarah Chen's archived and draft courses ───
+  // Everything below only adds rows, after every existing insert, so no
+  // existing row's id or values change. It gives the instructor Analytics
+  // page cross-course data: Sarah teaches a published, an archived and a draft
+  // course. Emma and James are enrolled in both her published and archived
+  // courses, so unique students (5) are fewer than total enrollments (7).
+  // No comments are added, so the Questions queue is unchanged.
+
+  function insertModulesAndLessons(
+    courseId: number,
+    modulesData: { title: string; lessons: { title: string; duration: number }[] }[],
+    createdDaysAgo: number
+  ) {
+    const lessonIds: number[] = [];
+    for (let mi = 0; mi < modulesData.length; mi++) {
+      const modData = modulesData[mi];
+      const [mod] = db
+        .insert(schema.modules)
+        .values({
+          courseId,
+          title: modData.title,
+          position: mi + 1,
+          createdAt: daysAgo(createdDaysAgo - mi),
+        })
+        .returning()
+        .all();
+
+      for (let li = 0; li < modData.lessons.length; li++) {
+        const lessonData = modData.lessons[li];
+        const [lesson] = db
+          .insert(schema.lessons)
+          .values({
+            moduleId: mod.id,
+            title: lessonData.title,
+            content: `## ${lessonData.title}\n\nLesson notes for "${lessonData.title}".`,
+            position: li + 1,
+            durationMinutes: lessonData.duration,
+            createdAt: daysAgo(createdDaysAgo - mi),
+          })
+          .returning()
+          .all();
+        lessonIds.push(lesson.id);
+      }
+    }
+    return lessonIds;
+  }
+
+  // Archived course: Sarah's older JavaScript-to-TypeScript course, no longer sold.
+  const [archivedCourse] = db
+    .insert(schema.courses)
+    .values({
+      title: "Migrating JavaScript to TypeScript",
+      slug: slugify("Migrating JavaScript to TypeScript"),
+      description:
+        "A practical guide to moving an existing JavaScript codebase to TypeScript one file at a time, without stopping feature work.",
+      salesCopy: `## Migrate Without the Big Rewrite
+
+This course has been retired in favour of **Introduction to TypeScript**. Existing students keep full access.`,
+      instructorId: instructor1.id,
+      categoryId: catBySlug["programming"].id,
+      status: CourseStatus.Archived,
+      coverImageUrl: "/images/course-typescript.svg",
+      price: 3999,
+      createdAt: daysAgo(110),
+      updatedAt: daysAgo(60),
+    })
+    .returning()
+    .all();
+
+  const archivedLessonIds = insertModulesAndLessons(
+    archivedCourse.id,
+    [
+      {
+        title: "Planning the Migration",
+        lessons: [
+          { title: "Why Migrate Incrementally?", duration: 9 },
+          { title: "Configuring allowJs and checkJs", duration: 12 },
+          { title: "Choosing a Migration Order", duration: 10 },
+        ],
+      },
+      {
+        title: "Converting Files",
+        lessons: [
+          { title: "Renaming .js to .ts", duration: 8 },
+          { title: "Typing Third-Party Modules", duration: 14 },
+          { title: "Turning On strict Mode", duration: 11 },
+        ],
+      },
+    ],
+    110
+  );
+
+  // 4-question quiz on "Configuring allowJs and checkJs"
+  const [archivedQuiz] = db
+    .insert(schema.quizzes)
+    .values({
+      lessonId: archivedLessonIds[1],
+      title: "Migration Setup Quiz",
+      passingScore: 0.7,
+    })
+    .returning()
+    .all();
+
+  const archivedQuizQuestions = [
+    {
+      text: "Which compiler option lets TypeScript compile .js files?",
+      type: QuestionType.MultipleChoice,
+      options: [
+        { text: "allowJs", correct: true },
+        { text: "strict", correct: false },
+        { text: "noEmit", correct: false },
+        { text: "isolatedModules", correct: false },
+      ],
+    },
+    {
+      text: "checkJs reports type errors in JavaScript files.",
+      type: QuestionType.TrueFalse,
+      options: [
+        { text: "True", correct: true },
+        { text: "False", correct: false },
+      ],
+    },
+    {
+      text: "Which comment disables type checking for a single JavaScript file?",
+      type: QuestionType.MultipleChoice,
+      options: [
+        { text: "// @ts-nocheck", correct: true },
+        { text: "// @ts-ignore-file", correct: false },
+        { text: "// eslint-disable", correct: false },
+        { text: "/* no-types */", correct: false },
+      ],
+    },
+    {
+      text: "You must convert every file before the project will compile.",
+      type: QuestionType.TrueFalse,
+      options: [
+        { text: "True", correct: false },
+        { text: "False", correct: true },
+      ],
+    },
+  ];
+
+  const archivedQuizOptionIds: {
+    questionId: number;
+    optionId: number;
+    correct: boolean;
+  }[] = [];
+
+  for (let qi = 0; qi < archivedQuizQuestions.length; qi++) {
+    const q = archivedQuizQuestions[qi];
+    const [question] = db
+      .insert(schema.quizQuestions)
+      .values({
+        quizId: archivedQuiz.id,
+        questionText: q.text,
+        questionType: q.type,
+        position: qi + 1,
+      })
+      .returning()
+      .all();
+
+    for (const opt of q.options) {
+      const [option] = db
+        .insert(schema.quizOptions)
+        .values({
+          questionId: question.id,
+          optionText: opt.text,
+          isCorrect: opt.correct,
+        })
+        .returning()
+        .all();
+      archivedQuizOptionIds.push({
+        questionId: question.id,
+        optionId: option.id,
+        correct: opt.correct,
+      });
+    }
+  }
+
+  // Enrollments: Emma and James are shared with Introduction to TypeScript;
+  // Liam is new to Sarah. James completed the course.
+  db.insert(schema.enrollments)
+    .values([
+      {
+        userId: students[0].id,
+        courseId: archivedCourse.id,
+        enrolledAt: daysAgo(100),
+      },
+      {
+        userId: students[1].id,
+        courseId: archivedCourse.id,
+        enrolledAt: daysAgo(95),
+        completedAt: daysAgo(70),
+      },
+      {
+        userId: students[3].id,
+        courseId: archivedCourse.id,
+        enrolledAt: daysAgo(80),
+      },
+    ])
+    .run();
+
+  // Lesson progress: James all 6, Emma 4 of 6, Liam 1 of 6.
+  for (let i = 0; i < archivedLessonIds.length; i++) {
+    markComplete(students[1].id, archivedLessonIds[i], 90 - i);
+  }
+  for (let i = 0; i < 4; i++) {
+    markComplete(students[0].id, archivedLessonIds[i], 98 - i);
+  }
+  markInProgress(students[0].id, archivedLessonIds[4]);
+  markComplete(students[3].id, archivedLessonIds[0], 78);
+  markInProgress(students[3].id, archivedLessonIds[1]);
+
+  // Quiz attempts: Emma retakes four times, scoring 25% → 25% → 75% → 100%
+  // in chronological order, so her first and best scores clearly differ.
+  recordQuizAttempt(students[0].id, archivedQuiz.id, archivedQuizOptionIds, [0], 97);
+  recordQuizAttempt(students[0].id, archivedQuiz.id, archivedQuizOptionIds, [1], 96);
+  recordQuizAttempt(students[0].id, archivedQuiz.id, archivedQuizOptionIds, [0, 1, 2], 95);
+  recordQuizAttempt(students[0].id, archivedQuiz.id, archivedQuizOptionIds, [0, 1, 2, 3], 94);
+  // James passes first time.
+  recordQuizAttempt(students[1].id, archivedQuiz.id, archivedQuizOptionIds, [0, 1, 2, 3], 92);
+
+  // Individual purchases: Liam paid a PPP price from Brazil.
+  db.insert(schema.purchases)
+    .values([
+      {
+        userId: students[0].id,
+        courseId: archivedCourse.id,
+        amountPaid: 3999,
+        country: "US",
+        createdAt: daysAgo(100),
+      },
+      {
+        userId: students[1].id,
+        courseId: archivedCourse.id,
+        amountPaid: 3999,
+        country: "US",
+        createdAt: daysAgo(95),
+      },
+      {
+        userId: students[3].id,
+        courseId: archivedCourse.id,
+        amountPaid: 2000,
+        country: "BR",
+        createdAt: daysAgo(80),
+      },
+    ])
+    .run();
+
+  // Ratings: James 5, Emma 4 (average 4.5).
+  db.insert(schema.courseRatings)
+    .values([
+      {
+        userId: students[1].id,
+        courseId: archivedCourse.id,
+        rating: 5,
+        createdAt: daysAgo(69),
+        updatedAt: daysAgo(69),
+      },
+      {
+        userId: students[0].id,
+        courseId: archivedCourse.id,
+        rating: 4,
+        createdAt: daysAgo(90),
+        updatedAt: daysAgo(90),
+      },
+    ])
+    .run();
+
+  console.log(
+    `Created archived course "${archivedCourse.title}" with ${archivedLessonIds.length} lessons, 1 quiz, 3 enrollments, 3 purchases and 2 ratings.`
+  );
+
+  // Draft course: still being written, no students.
+  const [draftCourse] = db
+    .insert(schema.courses)
+    .values({
+      title: "Type-Level Programming in TypeScript",
+      slug: slugify("Type-Level Programming in TypeScript"),
+      description:
+        "Go beyond everyday types: recursive conditional types, template literal parsing and building type-safe APIs.",
+      salesCopy: `## Coming Soon
+
+Learn to write types that compute other types.`,
+      instructorId: instructor1.id,
+      categoryId: catBySlug["programming"].id,
+      status: CourseStatus.Draft,
+      coverImageUrl: "/images/course-typescript.svg",
+      price: 5999,
+      createdAt: daysAgo(8),
+      updatedAt: daysAgo(2),
+    })
+    .returning()
+    .all();
+
+  const draftLessonIds = insertModulesAndLessons(
+    draftCourse.id,
+    [
+      {
+        title: "Thinking in Types",
+        lessons: [
+          { title: "Types as Functions", duration: 12 },
+          { title: "Recursive Conditional Types", duration: 18 },
+        ],
+      },
+    ],
+    8
+  );
+
+  console.log(
+    `Created draft course "${draftCourse.title}" with ${draftLessonIds.length} lessons and no enrollments.`
+  );
+
   console.log("\n✓ Seed complete!");
   console.log("  Users: 9 (1 admin, 2 instructors, 6 students)");
   console.log("  Categories: 5");
   console.log(
-    `  Courses: 2 (${course1LessonIds.length} + ${course2LessonIds.length} lessons)`
+    `  Courses: 4 (${course1LessonIds.length} + ${course2LessonIds.length} + ${archivedLessonIds.length} + ${draftLessonIds.length} lessons; Sarah Chen: 1 published, 1 archived, 1 draft)`
   );
-  console.log("  Quizzes: 3");
-  console.log("  Enrollments: 7");
-  console.log("  Course ratings: 6");
+  console.log("  Quizzes: 4");
+  console.log("  Enrollments: 10");
+  console.log("  Course ratings: 8");
   console.log("  Lesson comments: 15 (4 questions awaiting an answer)");
-  console.log("  Purchases: 6 (5 individual + 1 team)");
+  console.log("  Purchases: 9 (8 individual + 1 team)");
   console.log("  Teams: 1 (with 5 coupons)");
 }
 
