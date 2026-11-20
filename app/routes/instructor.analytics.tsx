@@ -6,8 +6,15 @@ import { getUserById } from "~/services/userService";
 import { getInstructorAnalytics } from "~/services/instructorAnalyticsService";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
-import { AlertTriangle, BarChart3, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  DollarSign,
+  Users,
+} from "lucide-react";
 import { CourseStatus, UserRole } from "~/db/schema";
+import { formatPrice } from "~/lib/utils";
 
 export function meta() {
   return [
@@ -42,6 +49,21 @@ function formatMetric<T>(
   format: (value: T) => string = String
 ): string {
   return value === null ? "—" : format(value);
+}
+
+/** A 0–1 fraction as a whole percent. */
+function formatFraction(fraction: number): string {
+  return `${Math.round(fraction * 100)}%`;
+}
+
+/** A 0–100 value as a whole percent. */
+function formatPercent(percent: number): string {
+  return `${Math.round(percent)}%`;
+}
+
+/** formatPrice, except zero revenue is "$0.00" rather than "Free". */
+function formatRevenue(cents: number): string {
+  return cents === 0 ? "$0.00" : formatPrice(cents);
 }
 
 function HeadlineCard({
@@ -114,6 +136,16 @@ export default function InstructorAnalytics({
               value={formatMetric(totals.uniqueStudents)}
               icon={<Users className="size-4 text-muted-foreground" />}
             />
+            <HeadlineCard
+              label="Total revenue"
+              value={formatRevenue(totals.revenue)}
+              icon={<DollarSign className="size-4 text-muted-foreground" />}
+            />
+            <HeadlineCard
+              label="Completion rate"
+              value={formatMetric(totals.completionRate, formatFraction)}
+              icon={<CheckCircle2 className="size-4 text-muted-foreground" />}
+            />
           </div>
 
           <Card>
@@ -124,6 +156,9 @@ export default function InstructorAnalytics({
                     <tr className="border-b border-border bg-muted/50">
                       <th className={thClass}>Course</th>
                       <th className={thClass}>Enrollments</th>
+                      <th className={thClass}>Completion rate</th>
+                      <th className={thClass}>Avg progress</th>
+                      <th className={thClass}>Revenue</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -149,6 +184,15 @@ export default function InstructorAnalytics({
                         </td>
                         <td className={tdClass}>
                           {formatMetric(course.enrollments)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.completionRate, formatFraction)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.avgProgress, formatPercent)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatRevenue(course.revenue)}
                         </td>
                       </tr>
                     ))}
