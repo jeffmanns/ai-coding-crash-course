@@ -19,19 +19,12 @@ import { createComment } from "./commentService";
 import { calculateProgress } from "./progressService";
 import { createPurchase, createTeamPurchase } from "./purchaseService";
 import { redeemCoupon } from "./couponService";
+import { unenrollUser } from "./enrollmentService";
 
-function insertInstructor(email: string) {
+function insertUser(email: string, role: schema.UserRole) {
   return testDb
     .insert(schema.users)
-    .values({ name: email, email, role: schema.UserRole.Instructor })
-    .returning()
-    .get();
-}
-
-function insertStudent(email: string) {
-  return testDb
-    .insert(schema.users)
-    .values({ name: email, email, role: schema.UserRole.Student })
+    .values({ name: email, email, role })
     .returning()
     .get();
 }
@@ -101,7 +94,7 @@ describe("getInstructorAnalytics", () => {
   });
 
   it("returns only the given instructor's courses", () => {
-    const other = insertInstructor("other@example.com");
+    const other = insertUser("other@example.com", schema.UserRole.Instructor);
     insertCourse("Other Course", other.id);
 
     const result = getInstructorAnalytics(base.instructor.id);
@@ -132,7 +125,10 @@ describe("getInstructorAnalytics", () => {
 
   it("counts a student in two courses once in unique students and once per course", () => {
     const second = insertCourse("Second Course", base.instructor.id);
-    const other = insertStudent("other-student@example.com");
+    const other = insertUser(
+      "other-student@example.com",
+      schema.UserRole.Student
+    );
     enroll(base.user.id, base.course.id);
     enroll(base.user.id, second.id);
     enroll(other.id, base.course.id);
@@ -153,7 +149,7 @@ describe("getInstructorAnalytics", () => {
     const big = insertCourse("Big Course", base.instructor.id);
     const medium = insertCourse("Medium Course", base.instructor.id);
     const students = ["a", "b", "c"].map((s) =>
-      insertStudent(`${s}@example.com`)
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
     );
     students.forEach((s) => enroll(s.id, big.id));
     enroll(students[0].id, medium.id);
@@ -172,7 +168,7 @@ describe("getInstructorAnalytics", () => {
 
   it("reports each course's rating average and count, with a null average when unrated", () => {
     const unrated = insertCourse("Unrated Course", base.instructor.id);
-    const other = insertStudent("rater@example.com");
+    const other = insertUser("rater@example.com", schema.UserRole.Student);
     rateCourse(base.user.id, base.course.id, 5);
     rateCourse(other.id, base.course.id, 4);
 
@@ -192,18 +188,13 @@ describe("getInstructorAnalytics", () => {
       base.instructor.id,
       schema.CourseStatus.Draft
     );
-    const otherInstructor = insertInstructor("other@example.com");
+    const otherInstructor = insertUser(
+      "other@example.com",
+      schema.UserRole.Instructor
+    );
     const othersCourse = insertCourse("Other Course", otherInstructor.id);
-    const admin = testDb
-      .insert(schema.users)
-      .values({
-        name: "Admin",
-        email: "admin@example.com",
-        role: schema.UserRole.Admin,
-      })
-      .returning()
-      .get();
-    const peer = insertStudent("peer@example.com");
+    const admin = insertUser("admin@example.com", schema.UserRole.Admin);
+    const peer = insertUser("peer@example.com", schema.UserRole.Student);
     const lesson = insertLesson(base.course.id);
     const secondLesson = insertLesson(second.id);
 
@@ -281,7 +272,10 @@ describe("getInstructorAnalytics", () => {
   it("counts each student once per quiz in both quiz averages, however many retakes", () => {
     const quizA = insertQuiz(base.course.id, "Quiz A");
     const quizB = insertQuiz(base.course.id, "Quiz B");
-    const other = insertStudent("other-student@example.com");
+    const other = insertUser(
+      "other-student@example.com",
+      schema.UserRole.Student
+    );
     enroll(base.user.id, base.course.id);
     enroll(other.id, base.course.id);
     attempt(base.user.id, quizA.id, 0.2, "2026-01-01T00:00:00.000Z");
@@ -295,6 +289,21 @@ describe("getInstructorAnalytics", () => {
     // Pairs: (user, A) best 0.6 first 0.2; (user, B) 0.5; (other, A) 1.0
     expect(course.avgBestQuizScore).toBeCloseTo(0.7);
     expect(course.avgFirstQuizScore).toBeCloseTo(1.7 / 3);
+  });
+
+  it("leaves students who have unenrolled out of both quiz averages, matching the Student Roster", () => {
+    const quiz = insertQuiz(base.course.id);
+    const leaver = insertUser("leaver@example.com", schema.UserRole.Student);
+    enroll(base.user.id, base.course.id);
+    enroll(leaver.id, base.course.id);
+    attempt(base.user.id, quiz.id, 0.5, "2026-01-01T00:00:00.000Z");
+    attempt(leaver.id, quiz.id, 1, "2026-01-01T00:00:00.000Z");
+    unenrollUser(leaver.id, base.course.id);
+
+    const [course] = getInstructorAnalytics(base.instructor.id).courses;
+
+    expect(course.avgBestQuizScore).toBe(0.5);
+    expect(course.avgFirstQuizScore).toBe(0.5);
   });
 
   it("reports null quiz averages for a course with no quiz attempts", () => {
@@ -312,7 +321,10 @@ describe("getInstructorAnalytics", () => {
   });
 
   it("returns an empty course list and zero unique students when no courses are in scope", () => {
-    const newcomer = insertInstructor("newcomer@example.com");
+    const newcomer = insertUser(
+      "newcomer@example.com",
+      schema.UserRole.Instructor
+    );
     const draft = insertCourse(
       "Draft Only",
       newcomer.id,
@@ -361,7 +373,7 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
     const second = insertCourse("Second Course", base.instructor.id);
     insertCourse("Empty Course", base.instructor.id);
     const [a, b, c] = ["a", "b", "c"].map((s) =>
-      insertStudent(`${s}@example.com`)
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
     );
     enroll(a.id, base.course.id);
     enroll(b.id, base.course.id);
@@ -408,7 +420,9 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
   it("averages progress over every enrolled student, counting not-started students as 0", () => {
     insertCourse("Empty Course", base.instructor.id);
     const lessons = addLessons(base.course.id, 4);
-    const [a, b] = ["a", "b"].map((s) => insertStudent(`${s}@example.com`));
+    const [a, b] = ["a", "b"].map((s) =>
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
+    );
     enroll(a.id, base.course.id);
     enroll(b.id, base.course.id);
     setLessonStatus(a.id, lessons[0].id);
@@ -416,7 +430,7 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
 
     const courses = coursesByTitle(getInstructorAnalytics(base.instructor.id));
 
-    expect(courses["Test Course"].avgProgress).toBe(25);
+    expect(courses["Test Course"].avgProgress).toBe(0.25);
     expect(courses["Empty Course"].avgProgress).toBeNull();
   });
 
@@ -424,7 +438,7 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
     const lessons = addLessons(base.course.id, 7);
     const noLessons = insertCourse("No Lessons", base.instructor.id);
     const students = ["a", "b", "c", "d", "e"].map((s) =>
-      insertStudent(`${s}@example.com`)
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
     );
     students.forEach((s) => enroll(s.id, base.course.id));
     enroll(students[0].id, noLessons.id);
@@ -452,9 +466,9 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
       calculateProgress(s.id, base.course.id, false, false)
     );
     expect(rosterProgress).toEqual([14, 43, 71, 0, 100]);
-    expect(courses["Test Course"].avgProgress).toBeCloseTo(228 / 5);
+    expect(courses["Test Course"].avgProgress).toBeCloseTo(2.28 / 5);
     expect(courses["No Lessons"].avgProgress).toBe(
-      calculateProgress(students[0].id, noLessons.id, false, false)
+      calculateProgress(students[0].id, noLessons.id, false, false) / 100
     );
     expect(courses["No Lessons"].avgProgress).toBe(0);
   });
@@ -462,7 +476,9 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
   it("sums revenue paid per course and in total", () => {
     const second = insertCourse("Second Course", base.instructor.id);
     insertCourse("Unsold Course", base.instructor.id);
-    const [a, b] = ["a", "b"].map((s) => insertStudent(`${s}@example.com`));
+    const [a, b] = ["a", "b"].map((s) =>
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
+    );
     createPurchase(a.id, base.course.id, 4999, "US");
     createPurchase(b.id, base.course.id, 2499, "IN"); // PPP-discounted
     createPurchase(a.id, second.id, 1000, "US");
@@ -477,7 +493,7 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
   });
 
   it("counts a team purchase once at its full amount and adds nothing for coupon redemptions", () => {
-    const buyer = insertStudent("buyer@example.com");
+    const buyer = insertUser("buyer@example.com", schema.UserRole.Student);
     const { coupons } = createTeamPurchase(
       buyer.id,
       base.course.id,
@@ -485,7 +501,9 @@ describe("getInstructorAnalytics — completion, progress and revenue", () => {
       "US",
       3
     );
-    const seats = ["a", "b", "c"].map((s) => insertStudent(`${s}@example.com`));
+    const seats = ["a", "b", "c"].map((s) =>
+      insertUser(`${s}@example.com`, schema.UserRole.Student)
+    );
     seats.forEach((s, i) => {
       expect(redeemCoupon(coupons[i].code, s.id, "US").ok).toBe(true);
     });

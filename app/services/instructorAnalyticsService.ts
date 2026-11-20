@@ -38,7 +38,7 @@ export type InstructorCourseAnalytics = {
   status: CourseStatus;
   enrollments: number;
   completionRate: number | null; // 0–1
-  avgProgress: number | null; // 0–100
+  avgProgress: number | null; // 0–1
   revenue: number; // cents
   rating: CourseRatingSummary;
   unansweredQuestions: number;
@@ -78,23 +78,25 @@ function countUnansweredByCourse(instructorId: number) {
 /**
  * Per course, the average over every (student, quiz) pair of that pair's best
  * score and of its first score (earliest attempt, lowest id breaks ties). Each
- * pair counts once, however many retakes it has. Courses with no attempts are
- * absent from the map.
+ * pair counts once, however many retakes it has. Only currently enrolled
+ * students count, matching the Student Roster. Courses with no such attempts
+ * are absent from the map.
  */
 function getQuizScoreAverages(courseIds: number[]) {
   const averages = new Map<number, { avgBest: number; avgFirst: number }>();
   if (courseIds.length === 0) return averages;
 
-  const pair = sql`partition by ${quizAttempts.userId}, ${quizAttempts.quizId}`;
+  const perStudentQuiz = sql`partition by ${quizAttempts.userId}, ${quizAttempts.quizId}`;
   const ranked = db
     .select({
       courseId: modules.courseId,
       score: quizAttempts.score,
-      bestScore: sql<number>`max(${quizAttempts.score}) over (${pair})`.as(
-        "best_score"
-      ),
+      bestScore:
+        sql<number>`max(${quizAttempts.score}) over (${perStudentQuiz})`.as(
+          "best_score"
+        ),
       attemptOrder:
-        sql<number>`row_number() over (${pair} order by ${quizAttempts.attemptedAt}, ${quizAttempts.id})`.as(
+        sql<number>`row_number() over (${perStudentQuiz} order by ${quizAttempts.attemptedAt}, ${quizAttempts.id})`.as(
           "attempt_order"
         ),
     })
@@ -102,6 +104,13 @@ function getQuizScoreAverages(courseIds: number[]) {
     .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
     .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(
+      enrollments,
+      and(
+        eq(enrollments.userId, quizAttempts.userId),
+        eq(enrollments.courseId, modules.courseId)
+      )
+    )
     .where(inArray(modules.courseId, courseIds))
     .as("ranked");
 
@@ -201,10 +210,11 @@ function getRevenueByCourse(instructorId: number) {
 // Average progress mirrors calculateProgress(userId, courseId, false, false),
 // the Student Roster's Progress column: completed lessons ÷ course lessons,
 // rounded to a whole percent per student, 0 for a course with no lessons.
+// Reported as a 0–1 fraction (the rounded percent ÷ 100), like completionRate.
 
 type ProgressRow = { completed: number; avgProgress: number | null };
 
-function ratio(numerator: number, denominator: number): number | null {
+function ratioOrNull(numerator: number, denominator: number): number | null {
   return denominator === 0 ? null : numerator / denominator;
 }
 
@@ -238,7 +248,7 @@ function getProgressByCourse(instructorId: number) {
     when coalesce(${lessonTotals.total}, 0) = 0 then 0
     else cast(
       (coalesce(${completedLessons.completed}, 0) * 1.0 / ${lessonTotals.total}) * 100 + 0.5
-      as integer)
+      as integer) / 100.0
   end`;
 
   const rows = db
@@ -269,7 +279,7 @@ function getCourseProgressMetrics(
 ) {
   const row = progress.get(course.id);
   return {
-    completionRate: ratio(row?.completed ?? 0, course.enrollments),
+    completionRate: ratioOrNull(row?.completed ?? 0, course.enrollments),
     avgProgress: row?.avgProgress ?? null,
   };
 }
@@ -284,5 +294,5 @@ function getProgressTotals(
     enrolled += course.enrollments;
     completed += progress.get(course.id)?.completed ?? 0;
   }
-  return { completionRate: ratio(completed, enrolled) };
+  return { completionRate: ratioOrNull(completed, enrolled) };
 }

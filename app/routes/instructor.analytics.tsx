@@ -1,8 +1,7 @@
 import type { ReactNode } from "react";
-import { Link, data, isRouteErrorResponse } from "react-router";
+import { Link, isRouteErrorResponse } from "react-router";
 import type { Route } from "./+types/instructor.analytics";
-import { getCurrentUserId } from "~/lib/session";
-import { getUserById } from "~/services/userService";
+import { requireInstructor } from "~/lib/access.server";
 import { getInstructorAnalytics } from "~/services/instructorAnalyticsService";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -14,7 +13,7 @@ import {
   MessageSquare,
   Users,
 } from "lucide-react";
-import { CourseStatus, UserRole } from "~/db/schema";
+import { CourseStatus } from "~/db/schema";
 import { formatPrice } from "~/lib/utils";
 
 export function meta() {
@@ -25,23 +24,8 @@ export function meta() {
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
-  const currentUserId = await getCurrentUserId(request);
-
-  if (!currentUserId) {
-    throw data("Select a user from the DevUI panel to view your analytics.", {
-      status: 401,
-    });
-  }
-
-  const user = getUserById(currentUserId);
-
-  if (!user || user.role !== UserRole.Instructor) {
-    throw data("Only instructors can access this page.", {
-      status: 403,
-    });
-  }
-
-  return getInstructorAnalytics(currentUserId);
+  const { userId } = await requireInstructor(request);
+  return getInstructorAnalytics(userId);
 }
 
 /** Metrics with no data are `null` and render as "—". */
@@ -52,13 +36,9 @@ function formatMetric<T>(
   return value === null ? "—" : format(value);
 }
 
+/** Rates, progress and quiz scores are all 0–1 fractions. */
 function formatPercent(fraction: number): string {
   return `${Math.round(fraction * 100)}%`;
-}
-
-/** Average progress is already 0–100. */
-function formatProgress(percent: number): string {
-  return `${Math.round(percent)}%`;
 }
 
 /** formatPrice, except zero revenue is "$0.00" rather than "Free". */
@@ -212,7 +192,7 @@ export default function InstructorAnalytics({
                           {formatMetric(course.completionRate, formatPercent)}
                         </td>
                         <td className={tdClass}>
-                          {formatMetric(course.avgProgress, formatProgress)}
+                          {formatMetric(course.avgProgress, formatPercent)}
                         </td>
                         <td className={tdClass}>
                           {formatRevenue(course.revenue)}
@@ -245,27 +225,18 @@ export default function InstructorAnalytics({
   );
 }
 
+const ERROR_TITLES: Record<number, string> = {
+  401: "Sign in required",
+  403: "Access denied",
+};
+
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let title = "Something went wrong";
   let message = "An unexpected error occurred while loading your analytics.";
 
   if (isRouteErrorResponse(error)) {
-    if (error.status === 401) {
-      title = "Sign in required";
-      message =
-        typeof error.data === "string"
-          ? error.data
-          : "Please select a user from the DevUI panel.";
-    } else if (error.status === 403) {
-      title = "Access denied";
-      message =
-        typeof error.data === "string"
-          ? error.data
-          : "You don't have permission to access this page.";
-    } else {
-      title = `Error ${error.status}`;
-      message = typeof error.data === "string" ? error.data : error.statusText;
-    }
+    title = ERROR_TITLES[error.status] ?? `Error ${error.status}`;
+    message = typeof error.data === "string" ? error.data : error.statusText;
   }
 
   return (
