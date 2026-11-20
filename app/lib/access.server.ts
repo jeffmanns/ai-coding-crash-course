@@ -166,3 +166,18 @@ export async function requireInstructorOrAdmin(request: Request) {
 
   return { userId, user, isAdmin: user.role === UserRole.Admin };
 }
+
+/**
+ * Throws unless the user is an instructor — admins included get 403. For pages
+ * about the signed-in instructor's own courses.
+ */
+export async function requireInstructor(request: Request) {
+  const userId = await requireUserId(request);
+  const user = getUserById(userId);
+
+  if (!user || user.role !== UserRole.Instructor) {
+    throw data("Only instructors can access this page.", { status: 403 });
+  }
+
+  return { userId, user };
+}
