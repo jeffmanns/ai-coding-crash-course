@@ -6,7 +6,7 @@ import { getUserById } from "~/services/userService";
 import { getInstructorAnalytics } from "~/services/instructorAnalyticsService";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
-import { AlertTriangle, BarChart3, Users } from "lucide-react";
+import { AlertTriangle, BarChart3, MessageSquare, Users } from "lucide-react";
 import { CourseStatus, UserRole } from "~/db/schema";
 
 export function meta() {
@@ -44,17 +44,30 @@ function formatMetric<T>(
   return value === null ? "—" : format(value);
 }
 
+function formatPercent(fraction: number): string {
+  return `${Math.round(fraction * 100)}%`;
+}
+
+function formatRating(rating: { average: number | null; count: number }) {
+  return formatMetric(
+    rating.average,
+    (average) => `${average.toFixed(1)} (${rating.count})`
+  );
+}
+
 function HeadlineCard({
   label,
   value,
   icon,
+  to,
 }: {
   label: string;
   value: string;
   icon: ReactNode;
+  to?: string;
 }) {
-  return (
-    <Card>
+  const card = (
+    <Card className={to ? "h-full transition-colors hover:bg-muted/30" : undefined}>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <span className="text-sm font-medium text-muted-foreground">
           {label}
@@ -66,6 +79,8 @@ function HeadlineCard({
       </CardContent>
     </Card>
   );
+
+  return to ? <Link to={to}>{card}</Link> : card;
 }
 
 const thClass =
@@ -114,6 +129,12 @@ export default function InstructorAnalytics({
               value={formatMetric(totals.uniqueStudents)}
               icon={<Users className="size-4 text-muted-foreground" />}
             />
+            <HeadlineCard
+              label="Unanswered questions"
+              value={formatMetric(totals.unansweredQuestions)}
+              icon={<MessageSquare className="size-4 text-muted-foreground" />}
+              to="/instructor/questions"
+            />
           </div>
 
           <Card>
@@ -124,6 +145,10 @@ export default function InstructorAnalytics({
                     <tr className="border-b border-border bg-muted/50">
                       <th className={thClass}>Course</th>
                       <th className={thClass}>Enrollments</th>
+                      <th className={thClass}>Rating</th>
+                      <th className={thClass}>Avg best quiz score</th>
+                      <th className={thClass}>Avg first quiz score</th>
+                      <th className={thClass}>Unanswered</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -149,6 +174,18 @@ export default function InstructorAnalytics({
                         </td>
                         <td className={tdClass}>
                           {formatMetric(course.enrollments)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatRating(course.rating)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.avgBestQuizScore, formatPercent)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.avgFirstQuizScore, formatPercent)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.unansweredQuestions)}
                         </td>
                       </tr>
                     ))}
