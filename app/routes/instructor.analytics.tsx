@@ -11,6 +11,7 @@ import {
   BarChart3,
   CheckCircle2,
   DollarSign,
+  MessageSquare,
   Users,
 } from "lucide-react";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -51,13 +52,12 @@ function formatMetric<T>(
   return value === null ? "—" : format(value);
 }
 
-/** A 0–1 fraction as a whole percent. */
-function formatFraction(fraction: number): string {
+function formatPercent(fraction: number): string {
   return `${Math.round(fraction * 100)}%`;
 }
 
-/** A 0–100 value as a whole percent. */
-function formatPercent(percent: number): string {
+/** Average progress is already 0–100. */
+function formatProgress(percent: number): string {
   return `${Math.round(percent)}%`;
 }
 
@@ -66,17 +66,28 @@ function formatRevenue(cents: number): string {
   return cents === 0 ? "$0.00" : formatPrice(cents);
 }
 
+function formatRating(rating: { average: number | null; count: number }) {
+  return formatMetric(
+    rating.average,
+    (average) => `${average.toFixed(1)} (${rating.count})`
+  );
+}
+
 function HeadlineCard({
   label,
   value,
   icon,
+  to,
 }: {
   label: string;
   value: string;
   icon: ReactNode;
+  to?: string;
 }) {
-  return (
-    <Card>
+  const card = (
+    <Card
+      className={to ? "h-full transition-colors hover:bg-muted/30" : undefined}
+    >
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <span className="text-sm font-medium text-muted-foreground">
           {label}
@@ -88,6 +99,8 @@ function HeadlineCard({
       </CardContent>
     </Card>
   );
+
+  return to ? <Link to={to}>{card}</Link> : card;
 }
 
 const thClass =
@@ -143,8 +156,14 @@ export default function InstructorAnalytics({
             />
             <HeadlineCard
               label="Completion rate"
-              value={formatMetric(totals.completionRate, formatFraction)}
+              value={formatMetric(totals.completionRate, formatPercent)}
               icon={<CheckCircle2 className="size-4 text-muted-foreground" />}
+            />
+            <HeadlineCard
+              label="Unanswered questions"
+              value={formatMetric(totals.unansweredQuestions)}
+              icon={<MessageSquare className="size-4 text-muted-foreground" />}
+              to="/instructor/questions"
             />
           </div>
 
@@ -159,6 +178,10 @@ export default function InstructorAnalytics({
                       <th className={thClass}>Completion rate</th>
                       <th className={thClass}>Avg progress</th>
                       <th className={thClass}>Revenue</th>
+                      <th className={thClass}>Rating</th>
+                      <th className={thClass}>Avg best quiz score</th>
+                      <th className={thClass}>Avg first quiz score</th>
+                      <th className={thClass}>Unanswered</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -186,13 +209,28 @@ export default function InstructorAnalytics({
                           {formatMetric(course.enrollments)}
                         </td>
                         <td className={tdClass}>
-                          {formatMetric(course.completionRate, formatFraction)}
+                          {formatMetric(course.completionRate, formatPercent)}
                         </td>
                         <td className={tdClass}>
-                          {formatMetric(course.avgProgress, formatPercent)}
+                          {formatMetric(course.avgProgress, formatProgress)}
                         </td>
                         <td className={tdClass}>
                           {formatRevenue(course.revenue)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatRating(course.rating)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.avgBestQuizScore, formatPercent)}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(
+                            course.avgFirstQuizScore,
+                            formatPercent
+                          )}
+                        </td>
+                        <td className={tdClass}>
+                          {formatMetric(course.unansweredQuestions)}
                         </td>
                       </tr>
                     ))}

@@ -9,7 +9,14 @@ import {
   lessons,
   modules,
   purchases,
+  quizAttempts,
+  quizzes,
 } from "~/db/schema";
+import {
+  getCourseRatingSummaries,
+  type CourseRatingSummary,
+} from "~/services/courseRatingService";
+import { getUnansweredQuestions } from "~/services/commentService";
 
 // ─── Instructor Analytics Service ───
 // Snapshot metrics across an instructor's published and archived courses.
@@ -20,8 +27,9 @@ const IN_SCOPE_STATUSES = [CourseStatus.Published, CourseStatus.Archived];
 
 export type InstructorAnalyticsTotals = {
   uniqueStudents: number;
-  completionRate: number | null; // 0–1
   revenue: number; // cents
+  completionRate: number | null; // 0–1
+  unansweredQuestions: number;
 };
 
 export type InstructorCourseAnalytics = {
@@ -32,6 +40,10 @@ export type InstructorCourseAnalytics = {
   completionRate: number | null; // 0–1
   avgProgress: number | null; // 0–100
   revenue: number; // cents
+  rating: CourseRatingSummary;
+  unansweredQuestions: number;
+  avgBestQuizScore: number | null; // 0–1 fraction
+  avgFirstQuizScore: number | null; // 0–1 fraction
 };
 
 export type InstructorAnalytics = {
@@ -44,6 +56,74 @@ function inScope(instructorId: number) {
     eq(courses.instructorId, instructorId),
     inArray(courses.status, IN_SCOPE_STATUSES)
   );
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+/**
+ * Reuses the Questions queue's definition of "unanswered" so the counts match
+ * when the instructor clicks through. Out-of-scope (draft) courses are dropped
+ * by the caller, which only looks up in-scope course ids.
+ */
+function countUnansweredByCourse(instructorId: number) {
+  const counts = new Map<number, number>();
+  for (const question of getUnansweredQuestions(instructorId)) {
+    counts.set(question.courseId, (counts.get(question.courseId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Per course, the average over every (student, quiz) pair of that pair's best
+ * score and of its first score (earliest attempt, lowest id breaks ties). Each
+ * pair counts once, however many retakes it has. Courses with no attempts are
+ * absent from the map.
+ */
+function getQuizScoreAverages(courseIds: number[]) {
+  const averages = new Map<number, { avgBest: number; avgFirst: number }>();
+  if (courseIds.length === 0) return averages;
+
+  const pair = sql`partition by ${quizAttempts.userId}, ${quizAttempts.quizId}`;
+  const ranked = db
+    .select({
+      courseId: modules.courseId,
+      score: quizAttempts.score,
+      bestScore: sql<number>`max(${quizAttempts.score}) over (${pair})`.as(
+        "best_score"
+      ),
+      attemptOrder:
+        sql<number>`row_number() over (${pair} order by ${quizAttempts.attemptedAt}, ${quizAttempts.id})`.as(
+          "attempt_order"
+        ),
+    })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(inArray(modules.courseId, courseIds))
+    .as("ranked");
+
+  // One row per (student, quiz) pair: its first attempt, carrying its best.
+  const rows = db
+    .select({
+      courseId: ranked.courseId,
+      avgBest: sql<number>`avg(${ranked.bestScore})`,
+      avgFirst: sql<number>`avg(${ranked.score})`,
+    })
+    .from(ranked)
+    .where(eq(ranked.attemptOrder, 1))
+    .groupBy(ranked.courseId)
+    .all();
+
+  for (const row of rows) {
+    averages.set(row.courseId, {
+      avgBest: row.avgBest,
+      avgFirst: row.avgFirst,
+    });
+  }
+  return averages;
 }
 
 export function getInstructorAnalytics(
@@ -72,18 +152,29 @@ export function getInstructorAnalytics(
 
   const progress = getProgressByCourse(instructorId);
   const revenue = getRevenueByCourse(instructorId);
+  const courseIds = courseRows.map((row) => row.id);
+  const ratings = getCourseRatingSummaries(courseIds);
+  const unanswered = countUnansweredByCourse(instructorId);
+  const quizScores = getQuizScoreAverages(courseIds);
+
+  const courseResults = courseRows.map((row) => ({
+    ...row,
+    ...getCourseProgressMetrics(row, progress),
+    revenue: revenue.get(row.id) ?? 0,
+    rating: ratings.get(row.id)!,
+    unansweredQuestions: unanswered.get(row.id) ?? 0,
+    avgBestQuizScore: quizScores.get(row.id)?.avgBest ?? null,
+    avgFirstQuizScore: quizScores.get(row.id)?.avgFirst ?? null,
+  }));
 
   return {
     totals: {
       uniqueStudents: totalsRow?.uniqueStudents ?? 0,
+      revenue: sum([...revenue.values()]),
       ...getProgressTotals(courseRows, progress),
-      revenue: sumRevenue(revenue),
+      unansweredQuestions: sum(courseResults.map((c) => c.unansweredQuestions)),
     },
-    courses: courseRows.map((course) => ({
-      ...course,
-      ...getCourseProgressMetrics(course, progress),
-      revenue: revenue.get(course.id) ?? 0,
-    })),
+    courses: courseResults,
   };
 }
 
@@ -104,12 +195,6 @@ function getRevenueByCourse(instructorId: number) {
     .groupBy(purchases.courseId)
     .all();
   return new Map<number, number>(rows.map((r) => [r.courseId, r.revenue]));
-}
-
-function sumRevenue(revenue: Map<number, number>) {
-  let total = 0;
-  for (const cents of revenue.values()) total += cents;
-  return total;
 }
 
 // ─── Completion and progress ───
